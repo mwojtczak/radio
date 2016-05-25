@@ -1,0 +1,3 @@
+1. Jak połaczyć się z programem po UDP:
+    nc -u localhost port
+    Tak można rozmawiać z serwerem z labów z 05. UDP
