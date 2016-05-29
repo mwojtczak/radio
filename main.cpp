@@ -85,6 +85,19 @@ int convert_param_to_number(string num, string param_name) {
     return stoi(num);
 }
 
+void check_returned_http_code(string code_str){
+    int code;
+    try {
+        code = stoi(code_str);
+    }
+    catch (const std::invalid_argument& ia) {
+        fatal("bad http code");
+    }
+    if (!(code == 200 || code == 302 || code == 304)){
+        fatal("bad http code");
+    }
+}
+
 bool yes_no_check(string word) {
     if (word.compare(YES) == 0) {
         return true;
@@ -109,6 +122,7 @@ void open_file() {
 void save_to_file(ofstream * file, const char *buffer, size_t size) {
     if (file == NULL) {
         //@TODO: cout
+        cout << "BŁĄD plik jest nullem" << endl;
     } else {
         (*file).write(buffer, size);
         if ((*file).bad()) {
@@ -135,7 +149,7 @@ void check_parameters(int argc, char **argv) {
     path_param = argv[2];
     radio_port_param = convert_param_to_number(argv[3], "r-port");
     file_param = argv[4];
-    if (file_param.compare(DO_NOT_SAVE_IN_FILE) == 0)
+    if (file_param.compare(DO_NOT_SAVE_IN_FILE) != 0)
         save = true;
     udp_port_param = convert_param_to_number(argv[5], "m-port");
     metadata = yes_no_check(argv[6]);
@@ -147,13 +161,13 @@ void connect_to_server() {
     if (metadata)
         request.append("Icy-MetaData:1\r\n");
     request.append("\r\n");
-    cout << request << endl;
     if (write(sock, request.c_str(), request.length()) != request.length()) {
         syserr("partial / failed write");
     }
 }
 
 void parse_header(string s) {
+    check_returned_http_code(s.substr(4, 3));
     std::istringstream resp(s);
     std::string header;
     std::string::size_type index;
@@ -167,9 +181,9 @@ void parse_header(string s) {
         }
     }
 
-    for (auto &kv: m) {
-        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
-    }
+//    for (auto &kv: m) {
+//        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
+//    }
 }
 
 string parse_metadata(string meta) {
@@ -177,14 +191,13 @@ string parse_metadata(string meta) {
     metadata.replace(0, strlen("StreamTitle="), "");
     metadata = metadata.substr(0, metadata.find_first_of(";"));
     int len = metadata.length();
-    cout << "metadata: " << metadata << "   " << len << endl;
+//    cout << "metadata: " << metadata << "   " << len << endl;
     if (len >= 2)
         return metadata.substr(1, len - 2);
     return metadata;
 }
 
 void play_command() {
-    cout << "play\n";
     if (!connected_to_server) {
         connect_to_server();
         connected_to_server = true;
@@ -193,7 +206,6 @@ void play_command() {
 }
 
 void pause_commnd() {
-    cout << "pause\n";
     state = PAUSE_STATE;
 }
 
@@ -202,7 +214,6 @@ void title_command() {
     int sflags = 0;
     int snd_len = 0;
     if (latest_title.length() > 0) {
-        cout << "WYSYŁANIE\n";
         snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
                          (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
     }
@@ -231,21 +242,20 @@ void do_command(string command) {
 }
 
 string get_metadata(char *buffer, int size) {
-    //@TODO
+    //@TODO: usunąć printfa
     printf("METADATA: %zd bytes: %s\n", size, buffer);
     string metadata(buffer, size);
     string title = parse_metadata(metadata);
-    cout << endl << "title: " << title << endl;
     return title;
 }
 
 void perform_mp3_data(const char *buffer, int size) {
-    //@TODO
     if (state == PLAY_STATE) {
         if (save){
             save_to_file(&file, buffer, size);
         } else{
-            printf("read from socket: %zd bytes: %s\n", size, buffer);
+//            printf("%s", buffer);
+            fwrite(buffer, 1,size ,stdout);
         }
     }
 }
@@ -261,7 +271,6 @@ void read_metadata() {
         //serwer nie odpowiada, poczekać trochę czy zakonczyć?
     }
     metadata_size = metadata_size * 16;
-    cout << endl << metadata_size << endl;
     if (metadata_size > 0) {
         int read_len = 0;
         while (read_len < metadata_size){
@@ -279,7 +288,6 @@ void prepare_data(char *buffer) {
     if (counter < metadata_byte_len) {
         rcv_len = read(sock, buffer, metadata_byte_len - counter); //+-1
         counter += rcv_len;
-        //printf("dane: %zd bytes: %s\n", rcv_len, buffer);
         perform_mp3_data(buffer, rcv_len);
     }
     if (counter == metadata_byte_len) {
@@ -306,11 +314,7 @@ int find_header_end(string http_header){
         }
         return -1;
     } else {
-        cout << "\nFOUND STH!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
         string header = http_header.substr(0, end_of_header + 3);
-        cout << header;
-        //http_header.append(header);
-        cout << "\nEND OF HEADER HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
         cout << "FULL HEADER: \n";
         cout << header << "END OF HEADER\n";
         parse_header(header);
@@ -419,52 +423,67 @@ int main(int argc, char **argv) {
                     //@TODO: do command
                     //w buforze command jest otrzymane polecenie
                     std::string command_string(command, udp_read_len); //przy oddawaniu zadania
-                    cout << command_string.length() << endl;
-
-
                     do_command(command_string);
-
                     (void) printf("read from socket: %zd bytes: %.*s\n", udp_read_len,
                                   (int) udp_read_len, command);
-
                 }
             }
 
             if (fd[1].revents & POLLIN) { //tcp
-                if (metadata) {
-                    if (header_ended) {
+                if (header_ended){
+                    if (metadata) {
                         prepare_data(buffer);
-                    } else {
-                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
-                            string read_data(buffer, rcv_len);
-                            http_header.append(read_data);
-                            int read_len = 0;
-                            if ((read_len = find_header_end(http_header)) > -1){
-                                header_ended = true;
-                                counter = read_len;
-                            }
-                            if (rcv_len < 0) {
-                                syserr("read");
-                            }
-                        } // rcv read
+                    } else{
+                        prepare_data_without_metadata(buffer);
                     }
                 } else {
-                    if (header_ended) {
-                        prepare_data_without_metadata(buffer);
-                    } else {
-                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
-                            string read_data(buffer, rcv_len);
-                            http_header.append(read_data);
-                            if (find_header_end(http_header) > -1){
-                                header_ended = true;
-                            }
-                            if (rcv_len < 0) {
-                                syserr("read");
-                            }
-                        } // rcv read
-                    }
-
+                    if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
+                        string read_data(buffer, rcv_len);
+                        http_header.append(read_data);
+                        int read_len = 0;
+                        if ((read_len = find_header_end(http_header)) > -1){
+                            header_ended = true;
+                            counter = read_len;
+                        }
+                        if (rcv_len < 0) {
+                            syserr("read");
+                        }
+                    } // rcv read
                 }
+//                if (metadata) {
+//                    if (header_ended) {
+//                        prepare_data(buffer);
+//                    } else {
+//                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
+//                            string read_data(buffer, rcv_len);
+//                            http_header.append(read_data);
+//                            int read_len = 0;
+//                            if ((read_len = find_header_end(http_header)) > -1){
+//                                header_ended = true;
+//                                counter = read_len;
+//                            }
+//                            if (rcv_len < 0) {
+//                                syserr("read");
+//                            }
+//                        } // rcv read
+//                    }
+//                } else {
+//                    if (header_ended) {
+//                        prepare_data_without_metadata(buffer);
+//                    } else {
+//                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
+//                            string read_data(buffer, rcv_len);
+//                            http_header.append(read_data);
+//                            if (find_header_end(http_header) > -1){
+//                                header_ended = true;
+//                            }
+//                            if (rcv_len < 0) {
+//                                syserr("read");
+//                            }
+//                        } // rcv read
+//                    }
+//
+//                }
 
             } //if tcp
         } //IF RES
@@ -472,7 +491,6 @@ int main(int argc, char **argv) {
     if (res == -1) {
         fatal("poll");
     }
-    cout << "Hello, World!" << endl;
     close_file();
     return 0;
 }
