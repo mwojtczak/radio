@@ -76,12 +76,20 @@ bool save = false;
 ofstream file;
 
 int convert_param_to_number(string num, string param_name) {
-    for (size_t i = 0; i < num.length(); ++i) {
-        if (!isdigit(num[i])) {
-            fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
-                  param_name.c_str());
-        }
+    //@TODO może zamienić na stoi z wyjątkiem?
+    try {
+        return stoi(num);
     }
+    catch (const std::invalid_argument& ia) {
+        fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
+              param_name.c_str());
+    }
+//    for (size_t i = 0; i < num.length(); ++i) {
+//        if (!isdigit(num[i])) {
+//            fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
+//                  param_name.c_str());
+//        }
+//    }
     return stoi(num);
 }
 

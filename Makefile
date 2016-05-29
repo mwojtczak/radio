@@ -1,7 +1,7 @@
 TARGET: main
 
 CC	= g++
-CFLAGS	= -g -std=c++11 -Wall -pedantic
+CFLAGS	= -g -std=c++11 -lboost_regex -Wall -pedantic
 LFLAGS	= -std=c++11 -Wall
 
 #main: main.o err.o
