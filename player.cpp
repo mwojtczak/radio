@@ -4,9 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <map>
-#include <boost/algorithm/string.hpp>
 #include <unistd.h>
-#include <iostream>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -15,12 +13,6 @@
 #include <netdb.h>
 #include <sys/poll.h>
 #include <map>
-#include <boost/algorithm/string.hpp>
-#include <map>
-#include <boost/algorithm/string.hpp>#include <map>
-#include <boost/algorithm/string.hpp>#include <map>
-#include <boost/algorithm/string.hpp>#include <map>
-#include <boost/algorithm/string.hpp>#include <map>
 #include <boost/algorithm/string.hpp>
 
 #define YES "yes"
@@ -40,11 +32,13 @@
 
 #define EMPTY_STATE 0
 #define PLAY_STATE 1
-#define TITLE_STATE 2
-#define PAUSE_STATE 3
-#define QUIT_STATE 4
+#define PAUSE_STATE 2
+#define QUIT_STATE 3
+#define EXIT_FAILURE 1
 
 using namespace std;
+
+//@TODO: jak czekać na server?
 
 bool connected_to_server = false;
 string host_param;  //nazwa serwera udostępniającego strumień audio;
@@ -67,16 +61,15 @@ int state;
 std::map<std::string, std::string> m;
 int metadata_byte_len = 0;
 int counter;
-string latest_title;
+string latest_title = "";
 int udp_sock;
-int flags, sflags;
+int flags;
 struct sockaddr_in udp_server_address;
 struct sockaddr_in udp_client_address;
 bool save = false;
 ofstream file;
 
 int convert_param_to_number(string num, string param_name) {
-    //@TODO może zamienić na stoi z wyjątkiem?
     try {
         return stoi(num);
     }
@@ -84,12 +77,6 @@ int convert_param_to_number(string num, string param_name) {
         fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
               param_name.c_str());
     }
-//    for (size_t i = 0; i < num.length(); ++i) {
-//        if (!isdigit(num[i])) {
-//            fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
-//                  param_name.c_str());
-//        }
-//    }
     return stoi(num);
 }
 
@@ -129,8 +116,7 @@ void open_file() {
 
 void save_to_file(ofstream * file, const char *buffer, size_t size) {
     if (file == NULL) {
-        //@TODO: cout
-        cout << "BŁĄD plik jest nullem" << endl;
+        fatal("Error handling file\n");
     } else {
         (*file).write(buffer, size);
         if ((*file).bad()) {
@@ -169,10 +155,16 @@ void connect_to_server() {
     if (metadata)
         request.append("Icy-MetaData:1\r\n");
     request.append("\r\n");
-    if (write(sock, request.c_str(), request.length()) != request.length()) {
+    if (write(sock, request.c_str(), request.length()) != (ssize_t)request.length()) {
         syserr("partial / failed write");
     }
 }
+
+//void get_all_values(){
+//    for (auto &kv: m) {
+//        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
+//    }
+//}
 
 void parse_header(string s) {
     check_returned_http_code(s.substr(4, 3));
@@ -188,10 +180,6 @@ void parse_header(string s) {
             ));
         }
     }
-
-//    for (auto &kv: m) {
-//        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
-//    }
 }
 
 string parse_metadata(string meta) {
@@ -199,9 +187,8 @@ string parse_metadata(string meta) {
     metadata.replace(0, strlen("StreamTitle="), "");
     metadata = metadata.substr(0, metadata.find_first_of(";"));
     int len = metadata.length();
-//    cout << "metadata: " << metadata << "   " << len << endl;
     if (len >= 2)
-        return metadata.substr(1, len - 2);
+        return metadata.substr(1, metadata.length() - 2);
     return metadata;
 }
 
@@ -225,7 +212,7 @@ void title_command() {
         snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
                          (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
     }
-    if (snd_len != latest_title.length())
+    if (snd_len != (ssize_t)latest_title.length())
         syserr("error on sending datagram to client socket");
 }
 
@@ -251,7 +238,7 @@ void do_command(string command) {
 
 string get_metadata(char *buffer, int size) {
     //@TODO: usunąć printfa
-    printf("METADATA: %zd bytes: %s\n", size, buffer);
+    printf("METADATA: %zd bytes: %s\n", (ssize_t)size, buffer);
     string metadata(buffer, size);
     string title = parse_metadata(metadata);
     return title;
@@ -262,8 +249,7 @@ void perform_mp3_data(const char *buffer, int size) {
         if (save){
             save_to_file(&file, buffer, size);
         } else{
-//            printf("%s", buffer);
-            fwrite(buffer, 1,size ,stdout);
+            fwrite(buffer, 1, size, stdout);
         }
     }
 }
@@ -277,12 +263,13 @@ void read_metadata() {
         fatal("read");
     if (rcv_len == 0) {
         //serwer nie odpowiada, poczekać trochę czy zakonczyć?
+
     }
     metadata_size = metadata_size * 16;
     if (metadata_size > 0) {
         int read_len = 0;
         while (read_len < metadata_size){
-            rcv_len = read(sock, buffer + read_len, metadata_size - read_len); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
+            rcv_len = read(sock, buffer + read_len, metadata_size - read_len);
             read_len += rcv_len;
         }
         latest_title = get_metadata(buffer, rcv_len);
@@ -291,10 +278,8 @@ void read_metadata() {
 
 //counter: przeczytaliśmy counter po metadanych
 void prepare_data(char *buffer) {
-    int position = 0; //ilość przeczytanych pozycji z bufora
-    int metadata_len = 0;
     if (counter < metadata_byte_len) {
-        rcv_len = read(sock, buffer, metadata_byte_len - counter); //+-1
+        rcv_len = read(sock, buffer, metadata_byte_len - counter);
         counter += rcv_len;
         perform_mp3_data(buffer, rcv_len);
     }
@@ -314,31 +299,24 @@ int find_icy_metaint(){
 //-1 brak headera, wpp. ilość danych przeczytanych po headerze
 //zakładamy że nie przeczytamy metadanych tutaj
 int find_header_end(string http_header){
-    int httplen = http_header.length();
     int end_of_header = 0;
-    if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) {
+    if ((end_of_header = http_header.find("\r\n\r\n")) >= (ssize_t)http_header.length()) {
         if (http_header.length() > MAX_HEADER_SIZE) {
             fatal("Too long header.\n");
         }
         return -1;
     } else {
         string header = http_header.substr(0, end_of_header + 3);
-        cout << "FULL HEADER: \n";
-        cout << header << "END OF HEADER\n";
+//        cout << "FULL HEADER: \n";
+//        cout << header << "END OF HEADER\n";
         parse_header(header);
         metadata_byte_len = find_icy_metaint();
         string some_data (http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
-        //@TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
-//        if (counter + http_header.substr(end_of_header + 4).length() > metadata_byte_len) {
-//            cout << endl << metadata_byte_len << "\nMETADANE W BUFOrZE" << counter << "  " <<
-//            http_header.substr(end_of_header + 4).length() << "  " << metadata_byte_len << "\n";
-//        } else {
-            counter = http_header.length() - end_of_header - 4;
-//        }
+//        @TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
+        counter = http_header.length() - end_of_header - 4;
         perform_mp3_data(some_data.c_str(), some_data.length());
         return  http_header.length() - end_of_header - 4;
     }
-    return 0;
 }
 
 void prepare_data_without_metadata(char * buffer){
@@ -353,8 +331,8 @@ int main(int argc, char **argv) {
 
 
     char command[COMMAND_LENGHT + 1];
-    socklen_t snda_len, rcva_len;
-    ssize_t udp_read_len, udp_send_len;
+    socklen_t rcva_len;
+    ssize_t udp_read_len;
 
     udp_sock = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
     if (udp_sock < 0)
@@ -398,8 +376,6 @@ int main(int argc, char **argv) {
 
 /************************* end of TCP part *********************************************/
 
-    snda_len = (socklen_t) sizeof(udp_client_address);
-//    play_command();
     struct pollfd fd[2];
 
     state = EMPTY_STATE;
@@ -412,9 +388,9 @@ int main(int argc, char **argv) {
     bool header_ended = false;
     string http_header = "";
 
-    int end_of_header = 0;
-    //int counter = 0; // mod metadata_byte_len
-    int metadata_len = 0;
+//    int end_of_header = 0;
+//    //int counter = 0; // mod metadata_byte_len
+//    int metadata_len = 0;
     open_file();
 
     counter = 0;

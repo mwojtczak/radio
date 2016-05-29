@@ -7,6 +7,8 @@
 #include <string.h>
 #include "err.h"
 
+#define EXIT_FAILURE 1
+
 void syserr(const char *fmt, ...) {
     va_list fmt_args;
 
