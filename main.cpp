@@ -35,8 +35,8 @@
 #define PORT_NUM     10001
 #define WAITING_TIME_IN_SECONDS 5
 #define BUFFER_SIZE 100000
-#define MAX_HEADER_SIZE 16000
 #define AVERAGE_HEADER_LENGHT 300 //@TODO: sprawdzić : przynamniej żeby było  < to + 8000
+#define MAX_HEADER_SIZE 16000 + AVERAGE_HEADER_LENGHT
 
 #define EMPTY_STATE 0
 #define PLAY_STATE 1
@@ -73,6 +73,7 @@ int flags, sflags;
 struct sockaddr_in udp_server_address;
 struct sockaddr_in udp_client_address;
 bool save = false;
+ofstream file;
 
 int convert_param_to_number(string num, string param_name) {
     for (size_t i = 0; i < num.length(); ++i) {
@@ -96,18 +97,16 @@ bool yes_no_check(string word) {
     return false;
 }
 
-ofstream *open_file() {
+void open_file() {
     if (file_param.compare(DO_NOT_SAVE_IN_FILE) == 0)
-        return NULL;
-    ofstream file;
+        return;
     file.open(file_param);
     if (!file.is_open()) {
         fatal("Error opening file\n");
     }
-    return &file;
 }
 
-void save_to_file(ofstream * file, char *buffer, size_t size) {
+void save_to_file(ofstream * file, const char *buffer, size_t size) {
     if (file == NULL) {
         //@TODO: cout
     } else {
@@ -118,7 +117,7 @@ void save_to_file(ofstream * file, char *buffer, size_t size) {
     }
 }
 
-void close_file(ofstream file) {
+void close_file() {
     if (file == NULL)
         return;
     file.close();
@@ -199,6 +198,7 @@ void pause_commnd() {
 }
 
 void title_command() {
+    //@TODO : wysyłanie bez terminalnego \0
     int sflags = 0;
     int snd_len = 0;
     if (latest_title.length() > 0) {
@@ -239,10 +239,14 @@ string get_metadata(char *buffer, int size) {
     return title;
 }
 
-void perform_mp3_data(char *buffer, int size) {
+void perform_mp3_data(const char *buffer, int size) {
     //@TODO
     if (state == PLAY_STATE) {
-        printf("read from socket: %zd bytes: %s\n", size, buffer);
+        if (save){
+            save_to_file(&file, buffer, size);
+        } else{
+            printf("read from socket: %zd bytes: %s\n", size, buffer);
+        }
     }
 }
 
@@ -259,8 +263,11 @@ void read_metadata() {
     metadata_size = metadata_size * 16;
     cout << endl << metadata_size << endl;
     if (metadata_size > 0) {
-        rcv_len = read(sock, buffer,
-                       metadata_size); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
+        int read_len = 0;
+        while (read_len < metadata_size){
+            rcv_len = read(sock, buffer + read_len, metadata_size - read_len); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
+            read_len += rcv_len;
+        }
         latest_title = get_metadata(buffer, rcv_len);
     }
 }
@@ -272,13 +279,59 @@ void prepare_data(char *buffer) {
     if (counter < metadata_byte_len) {
         rcv_len = read(sock, buffer, metadata_byte_len - counter); //+-1
         counter += rcv_len;
-        printf("dane: %zd bytes: %s\n", rcv_len, buffer);
+        //printf("dane: %zd bytes: %s\n", rcv_len, buffer);
+        perform_mp3_data(buffer, rcv_len);
     }
     if (counter == metadata_byte_len) {
-        //sprintf len to metadata
         read_metadata();
         counter = 0;
     }
+}
+
+int find_icy_metaint(){
+    if (m.find("icy-metaint") == m.end()){
+        fatal("No icy-metaint in header");
+    }
+    return stoi(m["icy-metaint"]);
+}
+
+//-1 brak headera, wpp. ilość danych przeczytanych po headerze
+//zakładamy że nie przeczytamy metadanych tutaj
+int find_header_end(string http_header){
+    int httplen = http_header.length();
+    int end_of_header = 0;
+    if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) {
+        if (http_header.length() > MAX_HEADER_SIZE) {
+            fatal("Too long header.\n");
+        }
+        return -1;
+    } else {
+        cout << "\nFOUND STH!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+        string header = http_header.substr(0, end_of_header + 3);
+        cout << header;
+        //http_header.append(header);
+        cout << "\nEND OF HEADER HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+        cout << "FULL HEADER: \n";
+        cout << header << "END OF HEADER\n";
+        parse_header(header);
+        metadata_byte_len = find_icy_metaint();
+        string some_data (http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
+        //@TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
+//        if (counter + http_header.substr(end_of_header + 4).length() > metadata_byte_len) {
+//            cout << endl << metadata_byte_len << "\nMETADANE W BUFOrZE" << counter << "  " <<
+//            http_header.substr(end_of_header + 4).length() << "  " << metadata_byte_len << "\n";
+//        } else {
+            counter = http_header.length() - end_of_header - 4;
+//        }
+        perform_mp3_data(some_data.c_str(), some_data.length());
+        return  http_header.length() - end_of_header - 4;
+    }
+    return 0;
+}
+
+void prepare_data_without_metadata(char * buffer){
+    rcv_len = read(sock, buffer, sizeof(buffer));
+    perform_mp3_data(buffer, rcv_len);
 }
 
 int main(int argc, char **argv) {
@@ -350,6 +403,7 @@ int main(int argc, char **argv) {
     int end_of_header = 0;
     //int counter = 0; // mod metadata_byte_len
     int metadata_len = 0;
+    open_file();
 
     counter = 0;
     while ((res = poll(fd, 2, 1000)) >= 0) {
@@ -384,34 +438,10 @@ int main(int argc, char **argv) {
                         if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
                             string read_data(buffer, rcv_len);
                             http_header.append(read_data);
-                            int httplen = http_header.length();
-                            if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) { //nie znaleziono
-                                if (http_header.length() > MAX_HEADER_SIZE) { //żeby nie zapełnić pamięci??
-                                    //http_header.append(read_data);
-                                    fatal("Too long header.\n");
-                                }
-                            } else {
-                                cout << "\nFOUND STH!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-                                string header = http_header.substr(0, end_of_header + 3);
-                                cout << header;
-                                //http_header.append(header);
-                                cout << "\nEND OF HEADER HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-                                cout << "FULL HEADER: \n";
-                                cout << header << "END OF HEADER\n";
-                                parse_header(header);
-                                metadata_byte_len = stoi(m["icy-metaint"]);
+                            int read_len = 0;
+                            if ((read_len = find_header_end(http_header)) > -1){
                                 header_ended = true;
-                                //@TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
-                                if (counter + http_header.substr(end_of_header + 4).length() > metadata_byte_len) {
-                                    cout << endl << metadata_byte_len << "\nMETADANE W BUFOrZE" << counter << "  " <<
-                                    http_header.substr(end_of_header + 4).length() << "  " << metadata_byte_len << "\n";
-                                } else {
-                                    counter = http_header.length() - end_of_header - 4;
-                                }
-                                if (state == PLAY_STATE) {
-                                    cout << http_header.substr(end_of_header + 4);
-                                }
-
+                                counter = read_len;
                             }
                             if (rcv_len < 0) {
                                 syserr("read");
@@ -419,6 +449,20 @@ int main(int argc, char **argv) {
                         } // rcv read
                     }
                 } else {
+                    if (header_ended) {
+                        prepare_data_without_metadata(buffer);
+                    } else {
+                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
+                            string read_data(buffer, rcv_len);
+                            http_header.append(read_data);
+                            if (find_header_end(http_header) > -1){
+                                header_ended = true;
+                            }
+                            if (rcv_len < 0) {
+                                syserr("read");
+                            }
+                        } // rcv read
+                    }
 
                 }
 
@@ -429,5 +473,6 @@ int main(int argc, char **argv) {
         fatal("poll");
     }
     cout << "Hello, World!" << endl;
+    close_file();
     return 0;
 }
