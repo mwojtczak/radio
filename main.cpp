@@ -214,14 +214,17 @@ void perform_mp3_data(char * buffer, int size){
 }
 
 void read_metadata(){
+    unsigned char byte;
     int metadata_size;
-    rcv_len = read(sock, &metadata_size, sizeof(metadata_size));
+    rcv_len = read(sock, &byte, 1);
+    metadata_size = byte;
     if (rcv_len == -1)
         fatal("read");
     if (rcv_len == 0){
         //serwer nie odpowiada, poczekać trochę czy zakonczyć?
     }
     metadata_size = metadata_size * 16;
+    cout <<endl<< metadata_size <<endl;
     rcv_len = read(sock, buffer, metadata_size); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
     get_metadata(buffer, rcv_len);
 }
@@ -343,15 +346,15 @@ int main(int argc, char **argv) {
             if (fd[1].revents & POLLIN) { //tcp
 //                cout << " Z SERVERA ICY\n";
                 if (header_ended) {
-//                        prepare_data(buffer);
+                        prepare_data(buffer);
 //                    if (counter < metadata_byte_len) {
 //                        //doczytaj date do metabajtu
-                        rcv_len = read(sock, buffer, sizeof(buffer)); //+-1
+                        //rcv_len = read(sock, buffer, sizeof(buffer)); //+-1
 //                        counter += rcv_len;
 //                        //zrob coś z danymi
-                        if (state == PLAY_STATE) {
-                            printf("JESTread from socket: %zd bytes: %s\n", rcv_len, buffer);
-                        }
+//                        if (state == PLAY_STATE) {
+//                            printf("JESTread from socket: %zd bytes: %s\n", rcv_len, buffer);
+//                        }
 //
 //                    }
 //                    if (counter == metadata_byte_len) {
@@ -382,11 +385,17 @@ int main(int argc, char **argv) {
                                 header_ended = true;
                                 //@TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
                                 if (counter + read_data.substr(end_of_header + 4).length() > metadata_byte_len) {
-                                    cout << "\nMETADANE W BUFOrZE"<< counter<< "  "<< read_data.substr(end_of_header + 4).length() << "  "  << metadata_byte_len << "\n";
+                                    cout << endl<< metadata_byte_len << "\nMETADANE W BUFOrZE"<< counter<< "  "<< read_data.substr(end_of_header + 4).length() << "  "  << metadata_byte_len << "\n";
                                 } else {
                                     int test = *((int*)buffer + end_of_header + 4);
                                     cout << "\nJESZCZE NIE MA METADANYCH OK\n" << test << "\n";
-                                    counter += read_data.substr(end_of_header + 4).length();
+                                    counter = read_data.substr(end_of_header + 4).length();
+                                    counter = rcv_len - end_of_header - 4;
+                                    unsigned char byte = *(buffer + end_of_header + 4);
+                                    int teest = byte;
+                                    if (*(buffer + end_of_header) == '\r')
+                                        cout << "TAK\n";
+                                    cout << byte << endl << sizeof(int) << "  "<< sizeof(char )<< endl << *(buffer + end_of_header + 4)<< endl << "teest" << teest * 16<< endl;
                                 }
                                 if (state == PLAY_STATE) {
                                     cout << read_data.substr(end_of_header + 4);
