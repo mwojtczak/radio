@@ -35,8 +35,8 @@
 #define PORT_NUM     10001
 #define WAITING_TIME_IN_SECONDS 5
 #define BUFFER_SIZE 100000
-#define MAX_HEADER_SIZE 100000
-#define AVERAGE_HEADER_LENGHT 500 //@TODO: sprawdzić : przynamniej żeby było  < to + 8000
+#define MAX_HEADER_SIZE 16000
+#define AVERAGE_HEADER_LENGHT 300 //@TODO: sprawdzić : przynamniej żeby było  < to + 8000
 
 #define EMPTY_STATE 0
 #define PLAY_STATE 1
@@ -46,6 +46,7 @@
 
 using namespace std;
 
+bool connected_to_server = false;
 string host_param;  //nazwa serwera udostępniającego strumień audio;
 string path_param;  //nazwa zasobu, zwykle sam ukośnik;
 int radio_port_param;     //numer portu serwera udostępniającego strumień audio,
@@ -66,6 +67,12 @@ int state;
 std::map<std::string, std::string> m;
 int metadata_byte_len = 0;
 int counter;
+string latest_title;
+int udp_sock;
+int flags, sflags;
+struct sockaddr_in udp_server_address;
+struct sockaddr_in udp_client_address;
+bool save = false;
 
 int convert_param_to_number(string num, string param_name) {
     for (size_t i = 0; i < num.length(); ++i) {
@@ -100,12 +107,12 @@ ofstream *open_file() {
     return &file;
 }
 
-void save_to_file(ofstream file, char *buffer, size_t size) {
+void save_to_file(ofstream * file, char *buffer, size_t size) {
     if (file == NULL) {
         //@TODO: cout
     } else {
-        file.write(buffer, size);
-        if (file.bad()) {
+        (*file).write(buffer, size);
+        if ((*file).bad()) {
             fatal("Error wtiting to file\n");
         }
     }
@@ -129,6 +136,8 @@ void check_parameters(int argc, char **argv) {
     path_param = argv[2];
     radio_port_param = convert_param_to_number(argv[3], "r-port");
     file_param = argv[4];
+    if (file_param.compare(DO_NOT_SAVE_IN_FILE) == 0)
+        save = true;
     udp_port_param = convert_param_to_number(argv[5], "m-port");
     metadata = yes_no_check(argv[6]);
 }
@@ -164,11 +173,23 @@ void parse_header(string s) {
     }
 }
 
+string parse_metadata(string meta) {
+    string metadata(meta);
+    metadata.replace(0, strlen("StreamTitle="), "");
+    metadata = metadata.substr(0, metadata.find_first_of(";"));
+    int len = metadata.length();
+    cout << "metadata: " << metadata << "   " << len << endl;
+    if (len >= 2)
+        return metadata.substr(1, len - 2);
+    return metadata;
+}
+
 void play_command() {
     cout << "play\n";
-//    if (state == EMPTY_STATE) {
+    if (!connected_to_server) {
         connect_to_server();
-//    }
+        connected_to_server = true;
+    }
     state = PLAY_STATE;
 }
 
@@ -178,7 +199,15 @@ void pause_commnd() {
 }
 
 void title_command() {
-    cout << "title\n";
+    int sflags = 0;
+    int snd_len = 0;
+    if (latest_title.length() > 0) {
+        cout << "WYSYŁANIE\n";
+        snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
+                         (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
+    }
+    if (snd_len != latest_title.length())
+        syserr("error on sending datagram to client socket");
 }
 
 void quit_command() {
@@ -201,44 +230,51 @@ void do_command(string command) {
     }
 }
 
-void get_metadata(char * buffer, int size){
+string get_metadata(char *buffer, int size) {
     //@TODO
     printf("METADATA: %zd bytes: %s\n", size, buffer);
+    string metadata(buffer, size);
+    string title = parse_metadata(metadata);
+    cout << endl << "title: " << title << endl;
+    return title;
 }
 
-void perform_mp3_data(char * buffer, int size){
+void perform_mp3_data(char *buffer, int size) {
     //@TODO
     if (state == PLAY_STATE) {
         printf("read from socket: %zd bytes: %s\n", size, buffer);
     }
 }
 
-void read_metadata(){
+void read_metadata() {
     unsigned char byte;
     int metadata_size;
     rcv_len = read(sock, &byte, 1);
     metadata_size = byte;
     if (rcv_len == -1)
         fatal("read");
-    if (rcv_len == 0){
+    if (rcv_len == 0) {
         //serwer nie odpowiada, poczekać trochę czy zakonczyć?
     }
     metadata_size = metadata_size * 16;
-    cout <<endl<< metadata_size <<endl;
-    rcv_len = read(sock, buffer, metadata_size); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
-    get_metadata(buffer, rcv_len);
+    cout << endl << metadata_size << endl;
+    if (metadata_size > 0) {
+        rcv_len = read(sock, buffer,
+                       metadata_size); //@TODO: chyba trzeba zrobić odczytywanie whilem, gdyby przesłali mniej
+        latest_title = get_metadata(buffer, rcv_len);
+    }
 }
 
 //counter: przeczytaliśmy counter po metadanych
-void prepare_data(char * buffer){
+void prepare_data(char *buffer) {
     int position = 0; //ilość przeczytanych pozycji z bufora
     int metadata_len = 0;
-    if (counter < metadata_byte_len){
+    if (counter < metadata_byte_len) {
         rcv_len = read(sock, buffer, metadata_byte_len - counter); //+-1
         counter += rcv_len;
         printf("dane: %zd bytes: %s\n", rcv_len, buffer);
     }
-    if (counter == metadata_byte_len){
+    if (counter == metadata_byte_len) {
         //sprintf len to metadata
         read_metadata();
         counter = 0;
@@ -248,11 +284,8 @@ void prepare_data(char * buffer){
 int main(int argc, char **argv) {
 
     check_parameters(argc, argv);
+    latest_title = "";
 
-    int udp_sock;
-    int flags, sflags;
-    struct sockaddr_in udp_server_address;
-    struct sockaddr_in udp_client_address;
 
     char command[COMMAND_LENGHT + 1];
     socklen_t snda_len, rcva_len;
@@ -344,68 +377,49 @@ int main(int argc, char **argv) {
             }
 
             if (fd[1].revents & POLLIN) { //tcp
-//                cout << " Z SERVERA ICY\n";
-                if (header_ended) {
+                if (metadata) {
+                    if (header_ended) {
                         prepare_data(buffer);
-//                    if (counter < metadata_byte_len) {
-//                        //doczytaj date do metabajtu
-                        //rcv_len = read(sock, buffer, sizeof(buffer)); //+-1
-//                        counter += rcv_len;
-//                        //zrob coś z danymi
-//                        if (state == PLAY_STATE) {
-//                            printf("JESTread from socket: %zd bytes: %s\n", rcv_len, buffer);
-//                        }
-//
-//                    }
-//                    if (counter == metadata_byte_len) {
-//                        rcv_len = read(sock, &metadata_len, 1);
-//                        metadata_len = 16 * metadata_len; // @TODO: sprawdzić jaki jest przelicznik
-//                        //przeczytaj metadane
-//                        rcv_len = read(sock, buffer, metadata_len); //+-1
-//                        counter = 0;
-//
-//                    }
-                } else {
-                    if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
-                        string read_data(buffer, rcv_len);
-                            if ((end_of_header = read_data.find("\r\n\r\n")) >= read_data.length()) { //nie znaleziono
-//                cout << read_data;
-                                if (http_header.length() < MAX_HEADER_SIZE) //żeby nie zapełnić pamięci??
-                                    http_header.append(read_data);
+                    } else {
+                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
+                            string read_data(buffer, rcv_len);
+                            http_header.append(read_data);
+                            int httplen = http_header.length();
+                            if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) { //nie znaleziono
+                                if (http_header.length() > MAX_HEADER_SIZE) { //żeby nie zapełnić pamięci??
+                                    //http_header.append(read_data);
+                                    fatal("Too long header.\n");
+                                }
                             } else {
                                 cout << "\nFOUND STH!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-                                string header = read_data.substr(0, end_of_header + 3);
+                                string header = http_header.substr(0, end_of_header + 3);
                                 cout << header;
-                                http_header.append(header);
+                                //http_header.append(header);
                                 cout << "\nEND OF HEADER HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
                                 cout << "FULL HEADER: \n";
-                                cout << http_header << "END OF HEADER\n";
-                                parse_header(http_header);
+                                cout << header << "END OF HEADER\n";
+                                parse_header(header);
                                 metadata_byte_len = stoi(m["icy-metaint"]);
                                 header_ended = true;
                                 //@TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
-                                if (counter + read_data.substr(end_of_header + 4).length() > metadata_byte_len) {
-                                    cout << endl<< metadata_byte_len << "\nMETADANE W BUFOrZE"<< counter<< "  "<< read_data.substr(end_of_header + 4).length() << "  "  << metadata_byte_len << "\n";
+                                if (counter + http_header.substr(end_of_header + 4).length() > metadata_byte_len) {
+                                    cout << endl << metadata_byte_len << "\nMETADANE W BUFOrZE" << counter << "  " <<
+                                    http_header.substr(end_of_header + 4).length() << "  " << metadata_byte_len << "\n";
                                 } else {
-                                    int test = *((int*)buffer + end_of_header + 4);
-                                    cout << "\nJESZCZE NIE MA METADANYCH OK\n" << test << "\n";
-                                    counter = read_data.substr(end_of_header + 4).length();
-                                    counter = rcv_len - end_of_header - 4;
-                                    unsigned char byte = *(buffer + end_of_header + 4);
-                                    int teest = byte;
-                                    if (*(buffer + end_of_header) == '\r')
-                                        cout << "TAK\n";
-                                    cout << byte << endl << sizeof(int) << "  "<< sizeof(char )<< endl << *(buffer + end_of_header + 4)<< endl << "teest" << teest * 16<< endl;
+                                    counter = http_header.length() - end_of_header - 4;
                                 }
                                 if (state == PLAY_STATE) {
-                                    cout << read_data.substr(end_of_header + 4);
+                                    cout << http_header.substr(end_of_header + 4);
                                 }
 
                             }
-                        if (rcv_len < 0) {
-                            syserr("read");
-                        }
-                    } // rcv read
+                            if (rcv_len < 0) {
+                                syserr("read");
+                            }
+                        } // rcv read
+                    }
+                } else {
+
                 }
 
             } //if tcp
