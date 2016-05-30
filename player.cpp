@@ -28,6 +28,7 @@
 #define BUFFER_SIZE 100000
 #define AVERAGE_HEADER_LENGHT 300
 #define MAX_HEADER_SIZE 16000 + AVERAGE_HEADER_LENGHT
+#define ICY_NAME "ICY"
 
 #define EMPTY_STATE 0
 #define PLAY_STATE 1
@@ -48,8 +49,7 @@ bool metadata;                   //'no', jeśli program ma nie żądać przysył
 int sock;
 struct addrinfo addr_hints;
 struct addrinfo *addr_result;
-
-int i, err;
+int err;
 char buffer[BUFFER_SIZE];
 ssize_t rcv_len;
 int res;
@@ -74,6 +74,12 @@ int convert_param_to_number(string num, string param_name) {
               param_name.c_str());
     }
     return stoi(num);
+}
+
+void check_http_response_type(string name){
+    if (name.compare(ICY_NAME) != 0){
+        fatal("Wrong http response");
+    }
 }
 
 /*
@@ -162,24 +168,25 @@ void connect_to_server() {
     if (metadata)
         request.append("Icy-MetaData:1\r\n");
     request.append("\r\n");
-    if (write(sock, request.c_str(), request.length()) != (ssize_t) request.length()) {
+    if (write(sock, request.c_str(), request.length()) != request.length()) {
         syserr("partial / failed write");
     }
 }
 
-//void get_all_values(){
-//    for (auto &kv: m) {
-//        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
-//    }
-//}
+void get_all_values(){
+    for (auto &kv: m) {
+        std::cout << "KEY: `" << kv.first << "`, VALUE: `" << kv.second << '`' << std::endl;
+    }
+}
 
 /*
  * Funkcja parsuje header http, wyciągając z niego wartości parametrów i zapisując w mapie.
  *
- * @param: napisdo sparsowania, reprezentujący header http
+ * @param: napis do sparsowania, reprezentujący header http
  */
 void parse_header(string s) {
     check_returned_http_code(s.substr(4, 3));
+    check_http_response_type(s.substr(0, 3));
     std::istringstream resp(s);
     std::string header;
     std::string::size_type index;
@@ -192,6 +199,8 @@ void parse_header(string s) {
             ));
         }
     }
+    cout << "parse header\n";
+    get_all_values();
 }
 
 string parse_metadata(string meta) {
@@ -224,7 +233,7 @@ void title_command() {
         snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
                          (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
     }
-    if (snd_len != (ssize_t) latest_title.length())
+    if (snd_len != latest_title.length())
         syserr("error on sending datagram to client socket");
 }
 
@@ -292,8 +301,8 @@ void read_metadata() {
 }
 
 /*
- * Funkcja czyta dane z socketu i rozdziela dane od metadanych, a następnie przetwarza je
- * w zależności od miejsca wystąpienia
+ * Funkcja czyta dane z socketu i rozdziela dane od metadanych na podstawie miejsca wystąpienia
+ * a następnie przetwarza je.
  *
  * @param: wskaźnik na miejsce w pamięci, gdzie można zapisywać dane
  *
@@ -330,15 +339,19 @@ int find_icy_metaint() {
  */
 int find_header_end(string http_header) {
     int end_of_header = 0;
-    if ((end_of_header = http_header.find("\r\n\r\n")) >= (ssize_t) http_header.length()) {
+    if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) {
         if (http_header.length() > MAX_HEADER_SIZE) {
             fatal("Too long header.\n");
         }
         return -1;
     } else {
         string header = http_header.substr(0, end_of_header + 3);
+                cout << "FULL HEADER: \n";
+                cout << header << "END OF HEADER\n";
         parse_header(header);
-        metadata_byte_len = find_icy_metaint();
+        if (metadata){
+            metadata_byte_len = find_icy_metaint();
+        }
         string some_data(http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
         counter = http_header.length() - end_of_header - 4;
         perform_mp3_data(some_data.c_str(), some_data.length());
@@ -347,7 +360,7 @@ int find_header_end(string http_header) {
 }
 
 void prepare_data_without_metadata(char *buffer) {
-    rcv_len = read(sock, buffer, sizeof(buffer));
+    rcv_len = read(sock, buffer, sizeof(buffer) - 1);
     perform_mp3_data(buffer, rcv_len);
 }
 
@@ -423,6 +436,7 @@ int main(int argc, char **argv) {
                 }
             }
             if (fd[1].revents & POLLIN) {
+                cout << "TCP\n";
                 if (header_ended) {
                     if (metadata) {
                         prepare_data(buffer);
