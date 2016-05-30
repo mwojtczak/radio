@@ -20,10 +20,8 @@
 #define PLAY "PLAY"
 #define TITLE "TITLE"
 #define QUIT "QUIT"
-#define MAX_COMMAND_LENGHT 5
 #define DO_NOT_SAVE_IN_FILE "-"
 #define COMMAND_LENGHT   5
-#define PORT_NUM     10001
 #define WAITING_TIME_IN_SECONDS 5
 #define BUFFER_SIZE 100000
 #define AVERAGE_HEADER_LENGHT 300
@@ -76,6 +74,11 @@ int convert_param_to_number(string num, string param_name) {
     return stoi(num);
 }
 
+/*
+ * Funkcja sprawdza, czy odpowiedz serwera jest zgodna z protokołem ICY
+ *
+ * @param: string reprezentujący pierwsze trzy znaki odpowiedzi serwera
+ */
 void check_http_response_type(string name){
     if (name.compare(ICY_NAME) != 0){
         fatal("Wrong http response");
@@ -168,7 +171,7 @@ void connect_to_server() {
     if (metadata)
         request.append("Icy-MetaData:1\r\n");
     request.append("\r\n");
-    if (write(sock, request.c_str(), request.length()) != request.length()) {
+    if ((size_t)write(sock, request.c_str(), request.length()) != request.length()) {
         syserr("partial / failed write");
     }
 }
@@ -199,8 +202,6 @@ void parse_header(string s) {
             ));
         }
     }
-    cout << "parse header\n";
-    get_all_values();
 }
 
 string parse_metadata(string meta) {
@@ -228,7 +229,7 @@ void pause_commnd() {
 void title_command() {
     //@TODO : wysyłanie bez terminalnego \0
     int sflags = 0;
-    int snd_len = 0;
+    size_t snd_len = 0;
     if (latest_title.length() > 0) {
         snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
                          (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
@@ -338,7 +339,7 @@ int find_icy_metaint() {
  *          wpp. ilość przeczytanych bajtów danych po headerze
  */
 int find_header_end(string http_header) {
-    int end_of_header = 0;
+    size_t end_of_header = 0;
     if ((end_of_header = http_header.find("\r\n\r\n")) >= http_header.length()) {
         if (http_header.length() > MAX_HEADER_SIZE) {
             fatal("Too long header.\n");
@@ -346,8 +347,6 @@ int find_header_end(string http_header) {
         return -1;
     } else {
         string header = http_header.substr(0, end_of_header + 3);
-                cout << "FULL HEADER: \n";
-                cout << header << "END OF HEADER\n";
         parse_header(header);
         if (metadata){
             metadata_byte_len = find_icy_metaint();
@@ -366,7 +365,6 @@ void prepare_data_without_metadata(char *buffer) {
 
 int main(int argc, char **argv) {
     check_parameters(argc, argv);
-    latest_title = "";
     char command[COMMAND_LENGHT + 1];
 
 /************************************ UDP part **********************************************************************/
@@ -385,11 +383,16 @@ int main(int argc, char **argv) {
         syserr("bind");
     }
 /*************************************** TCP part ********************************************************************/
+    struct timeval timeout;
+    timeout.tv_sec = WAITING_TIME_IN_SECONDS;
+    timeout.tv_usec = 0;
+
     memset(&addr_hints, 0, sizeof(struct addrinfo));
-    addr_hints.ai_family = AF_INET; // IPv4
+    addr_hints.ai_family = AF_UNSPEC;//AF_INET; // IPv4
     addr_hints.ai_socktype = SOCK_STREAM;
     addr_hints.ai_protocol = IPPROTO_TCP;
-    err = getaddrinfo(host_param.c_str(), argv[3], &addr_hints, &addr_result);
+    addr_hints.ai_flags = AI_PASSIVE;
+    err = getaddrinfo(host_param.c_str(), to_string(radio_port_param).c_str(), &addr_hints, &addr_result);
     if (err == EAI_SYSTEM) {
         syserr("getaddrinfo: %s", gai_strerror(err));
     }
@@ -398,15 +401,21 @@ int main(int argc, char **argv) {
     }
 
     sock = socket(addr_result->ai_family, addr_result->ai_socktype, addr_result->ai_protocol);
-    if (sock < 0)
+    if (sock < 0) {
         syserr("socket");
-
-    if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0)
+    }
+    if (setsockopt (sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0){
+        syserr("setsockopt failed\n");
+    }
+    if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
         syserr("connect");
+    }
 
     freeaddrinfo(addr_result);
 
-/************************* end of TCP part *********************************************/
+
+
+/**************************************** end of TCP part ************************************************************/
 
     struct pollfd fd[2];
 
@@ -419,11 +428,10 @@ int main(int argc, char **argv) {
     bool header_ended = false;
     string http_header = "";
     open_file();
-
     counter = 0;
     while ((res = poll(fd, 2, 1000)) >= 0) {
         if (res > 0) {
-            if (fd[0].revents & POLLIN) { //data in udp socket
+            if (fd[0].revents & POLLIN) {
                 rcva_len = (socklen_t) sizeof(udp_client_address);
                 flags = 0;
                 udp_read_len = recvfrom(udp_sock, command, sizeof(command), flags,
@@ -436,7 +444,6 @@ int main(int argc, char **argv) {
                 }
             }
             if (fd[1].revents & POLLIN) {
-                cout << "TCP\n";
                 if (header_ended) {
                     if (metadata) {
                         prepare_data(buffer);
@@ -455,6 +462,10 @@ int main(int argc, char **argv) {
                         if (rcv_len < 0) {
                             syserr("read");
                         }
+                    }
+                    if (rcv_len== 0){
+                        close(sock);
+                        exit(EXIT_SUCCESS);
                     }
                 }
             }
