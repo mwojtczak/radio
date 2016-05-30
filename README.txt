@@ -1,15 +1,31 @@
-Uwagi do zadania:
-Zaimplementowana została wyłącznie część A. Rozwiązanie wydaje się działać.
-1. Przyjęłam, że poprawną komendą jest wyłącznie jeden z napisów podanych w treści zadania, zatem nie może on być poprzedzony spacjami
-ani innymi znakami, a ani się nimi kończyć.
+Computer Networks Classes Assignment
+The goal was to implement radio player.
+With tcp connection we get audio data (optionaly with metadata) from given source. User can give commands via UPD.
+Avaliable commands:
+PAUSE - pauses passing audio data to file/output
+PLAY - starts passing audio data
+TITLE - returns title of current song (if metadata were on)
+QUIT - quits program player
 
-2. Parsując dane od serwera sprawdzam, czy odpowiedź:
-    a) zaczyna się od napisu "ICY", żeby sprawdzić czy typ protokołu się zgadza
-    b) posiada kod równy 200, 302 lub 304 (żeby ewentualnie wykluczyć jakieś wiadomości o błędzie od serwera)
+HOW TO RUN
+First run Makefile.
+Then run player:
+	./player host path r-port file m-port md
+where
+	host - server name providing audio stream
+	path - name of resource
+	r-port - port of server providing audio stream
+	file - filename to save audio data or '-'
+	m-port - udp port to be the source of commands
+	md - whether to check metadata, 'yes' or 'no'
 
-3. Zapisany dźwięk odpalałam w programie VLC media player, nie udało mi się odpalić go z przekierowaniem do mplayera, gdyż
-dostawałam wiadomość "Cache empty, consider increasing -cache and/or -cache-min. [performance issue]", mimo zwiększania/ zmniejszania
-bufora problem nie zniknął.
+Example of usage:
+	./player ant-waw-01.cdn.eurozet.pl / 8602 test.mp3 3500 yes
+
+Then connect to port 3500 via nc:
+	nc -u localhost 3500
+to be able to send commands to player.
+
 
 
 

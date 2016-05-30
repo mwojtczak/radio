@@ -26,7 +26,7 @@
 #define WAITING_TIME_IN_SECONDS 5
 #define BUFFER_SIZE 100000
 #define AVERAGE_HEADER_LENGHT 300
-#define MAX_HEADER_SIZE 16000 + AVERAGE_HEADER_LENGHT
+#define MAX_HEADER_SIZE 26000 + AVERAGE_HEADER_LENGHT
 #define ICY_NAME "ICY"
 
 #define EMPTY_STATE 0
@@ -61,7 +61,6 @@ struct sockaddr_in udp_client_address;
 bool save = false;
 ofstream file;
 std::clock_t last_server_call;
-bool server_called = false;
 
 int convert_param_to_number(string num, string param_name) {
     try {
@@ -137,7 +136,7 @@ void save_to_file(ofstream *file, const char *buffer, size_t size) {
 }
 
 void close_file() {
-    if (file == NULL)
+    if (file)
         return;
     file.close();
     if (file.bad()) {
@@ -223,7 +222,6 @@ void pause_commnd() {
 }
 
 void title_command() {
-    //@TODO : wysyłanie bez terminalnego \0
     int sflags = 0;
     size_t snd_len = 0;
     if (latest_title.length() > 0) {
@@ -241,7 +239,8 @@ void quit_command() {
 }
 
 void do_command(string command) {
-    command = command.substr(0, command.length() - 1); //@TODO: usunąć przy oddawaniu zadania: do testów w konsoli
+    if (command[command.length() - 1] == '\n')    
+        command = command.substr(0, command.length() - 1);
     if (command.compare(PLAY) == 0)
         play_command();
     else if (command.compare(PAUSE) == 0)
@@ -363,6 +362,12 @@ void prepare_data_without_metadata(char *buffer) {
     perform_mp3_data(buffer, rcv_len);
 }
 
+void exit_failure(){
+    close(sock);
+    close_file();
+    exit(EXIT_FAILURE);
+}
+
 int main(int argc, char **argv) {
     check_parameters(argc, argv);
     char command[COMMAND_LENGHT + 1];
@@ -411,7 +416,7 @@ int main(int argc, char **argv) {
 
     struct pollfd fd[2];
 
-    state = EMPTY_STATE;
+    state = PLAY_STATE;
     fd[0].fd = udp_sock;
     fd[0].events = POLLIN | POLLOUT;
     fd[1].fd = sock;
@@ -427,17 +432,13 @@ int main(int argc, char **argv) {
 
     while ((res = poll(fd, 2, 1000 * WAITING_TIME_IN_SECONDS)) >= 0) {
         if (res == 0){
-            close(sock);
-            close_file();
             fprintf(stderr, "Przekroczono czas oczekiwania na dane od serwera radiowego.\n");
-            exit(EXIT_FAILURE);
+            exit_failure();
         }
         if (res > 0) {
             if (( std::clock() - last_server_call ) / (double) CLOCKS_PER_SEC > WAITING_TIME_IN_SECONDS){
-                close(sock);
-                close_file();
                 fprintf(stderr, "Przekroczono czas oczekiwania na dane od serwera radiowego.\n");
-                exit(EXIT_FAILURE);
+                exit_failure();
             }
 
             if (fd[0].revents & POLLIN) {
