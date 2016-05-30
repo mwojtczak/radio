@@ -12,6 +12,7 @@
 #include "err.h"
 #include <netdb.h>
 #include <sys/poll.h>
+#include <ctime>
 #include <boost/algorithm/string.hpp>
 
 #define YES "yes"
@@ -35,9 +36,6 @@
 
 using namespace std;
 
-//@TODO: jak czekać na server?
-
-bool connected_to_server = false;
 string host_param;               //nazwa serwera udostępniającego strumień audio;
 string path_param;               //nazwa zasobu, zwykle sam ukośnik;
 int radio_port_param;            //numer portu serwera udostępniającego strumień audio,
@@ -62,6 +60,8 @@ struct sockaddr_in udp_server_address;
 struct sockaddr_in udp_client_address;
 bool save = false;
 ofstream file;
+std::clock_t last_server_call;
+bool server_called = false;
 
 int convert_param_to_number(string num, string param_name) {
     try {
@@ -215,10 +215,6 @@ string parse_metadata(string meta) {
 }
 
 void play_command() {
-    if (!connected_to_server) {
-        connect_to_server();
-        connected_to_server = true;
-    }
     state = PLAY_STATE;
 }
 
@@ -239,6 +235,8 @@ void title_command() {
 }
 
 void quit_command() {
+    close(sock);
+    close_file();
     exit(EXIT_SUCCESS);
 }
 
@@ -287,14 +285,16 @@ void read_metadata() {
     if (rcv_len == -1)
         fatal("read");
     if (rcv_len == 0) {
-        //serwer nie odpowiada, poczekać trochę czy zakonczyć?
-//@TODO:
+        quit_command();
     }
     metadata_size = metadata_size * 16;
     if (metadata_size > 0) {
         int read_len = 0;
         while (read_len < metadata_size) {
             rcv_len = read(sock, buffer + read_len, metadata_size - read_len);
+            if (rcv_len == 0) {
+                quit_command();
+            }
             read_len += rcv_len;
         }
         latest_title = get_metadata(buffer, rcv_len);
@@ -367,7 +367,7 @@ int main(int argc, char **argv) {
     check_parameters(argc, argv);
     char command[COMMAND_LENGHT + 1];
 
-/************************************ UDP part **********************************************************************/
+/************************************ UDP connection *****************************************************************/
     socklen_t rcva_len;
     ssize_t udp_read_len;
 
@@ -382,13 +382,10 @@ int main(int argc, char **argv) {
     if (bind(udp_sock, (struct sockaddr *) &udp_server_address, (socklen_t) sizeof(udp_server_address)) < 0) {
         syserr("bind");
     }
-/*************************************** TCP part ********************************************************************/
-    struct timeval timeout;
-    timeout.tv_sec = WAITING_TIME_IN_SECONDS;
-    timeout.tv_usec = 0;
+/*************************************** TCP connection **************************************************************/
 
     memset(&addr_hints, 0, sizeof(struct addrinfo));
-    addr_hints.ai_family = AF_UNSPEC;//AF_INET; // IPv4
+    addr_hints.ai_family = AF_UNSPEC;
     addr_hints.ai_socktype = SOCK_STREAM;
     addr_hints.ai_protocol = IPPROTO_TCP;
     addr_hints.ai_flags = AI_PASSIVE;
@@ -404,18 +401,13 @@ int main(int argc, char **argv) {
     if (sock < 0) {
         syserr("socket");
     }
-    if (setsockopt (sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0){
-        syserr("setsockopt failed\n");
-    }
     if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
         syserr("connect");
     }
 
     freeaddrinfo(addr_result);
 
-
-
-/**************************************** end of TCP part ************************************************************/
+/******************************************* poll() setup ************************************************************/
 
     struct pollfd fd[2];
 
@@ -429,8 +421,25 @@ int main(int argc, char **argv) {
     string http_header = "";
     open_file();
     counter = 0;
-    while ((res = poll(fd, 2, 1000)) >= 0) {
+/****************************************** connecting to server *****************************************************/
+    connect_to_server();
+    last_server_call = std::clock();
+
+    while ((res = poll(fd, 2, 1000 * WAITING_TIME_IN_SECONDS)) >= 0) {
+        if (res == 0){
+            close(sock);
+            close_file();
+            fprintf(stderr, "Przekroczono czas oczekiwania na dane od serwera radiowego.\n");
+            exit(EXIT_FAILURE);
+        }
         if (res > 0) {
+            if (( std::clock() - last_server_call ) / (double) CLOCKS_PER_SEC > WAITING_TIME_IN_SECONDS){
+                close(sock);
+                close_file();
+                fprintf(stderr, "Przekroczono czas oczekiwania na dane od serwera radiowego.\n");
+                exit(EXIT_FAILURE);
+            }
+
             if (fd[0].revents & POLLIN) {
                 rcva_len = (socklen_t) sizeof(udp_client_address);
                 flags = 0;
@@ -444,6 +453,7 @@ int main(int argc, char **argv) {
                 }
             }
             if (fd[1].revents & POLLIN) {
+                last_server_call = clock();
                 if (header_ended) {
                     if (metadata) {
                         prepare_data(buffer);
@@ -464,8 +474,7 @@ int main(int argc, char **argv) {
                         }
                     }
                     if (rcv_len== 0){
-                        close(sock);
-                        exit(EXIT_SUCCESS);
+                        quit_command();
                     }
                 }
             }
