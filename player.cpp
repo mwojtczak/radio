@@ -12,7 +12,6 @@
 #include "err.h"
 #include <netdb.h>
 #include <sys/poll.h>
-#include <map>
 #include <boost/algorithm/string.hpp>
 
 #define YES "yes"
@@ -80,6 +79,12 @@ int convert_param_to_number(string num, string param_name) {
     return stoi(num);
 }
 
+/*
+ * Funkcja sprawdza, czy HTTP request kończy się właściwym kodem.
+ * Dopuszczalne kody, które obsługujemy to 200, 302, 304.
+ *
+ * @param: napis reprezentujący ów kod
+ */
 void check_returned_http_code(string code_str){
     int code;
     try {
@@ -134,7 +139,9 @@ void close_file() {
     }
 }
 
-
+/*
+ * Funkcja sprawdza ilość i poprawność parametrów.
+ */
 void check_parameters(int argc, char **argv) {
     if (argc != 7) {
         fatal("Użycie:  ./player host path r-port file m-port md\n");
@@ -149,6 +156,9 @@ void check_parameters(int argc, char **argv) {
     metadata = yes_no_check(argv[6]);
 }
 
+/*
+ * Funkcja buduje zapytanie HTTM, a następnie przesyła je do serwera podanego w parametrach wywołania programu.
+ */
 void connect_to_server() {
     string request = "GET ";
     request.append(path_param).append(" HTTP /1.0\r\n");
@@ -166,6 +176,11 @@ void connect_to_server() {
 //    }
 //}
 
+/*
+ * Funkcja parsuje header http, wyciągając z niego wartości parametrów i zapisując w mapie.
+ *
+ * @param: napisdo sparsowania, reprezentujący header http
+ */
 void parse_header(string s) {
     check_returned_http_code(s.substr(4, 3));
     std::istringstream resp(s);
@@ -217,7 +232,6 @@ void title_command() {
 }
 
 void quit_command() {
-    //@TODO: udp się samo zamknie, a co z tcp?
     exit(EXIT_SUCCESS);
 }
 
@@ -237,8 +251,6 @@ void do_command(string command) {
 }
 
 string get_metadata(char *buffer, int size) {
-    //@TODO: usunąć printfa
-    printf("METADATA: %zd bytes: %s\n", (ssize_t)size, buffer);
     string metadata(buffer, size);
     string title = parse_metadata(metadata);
     return title;
@@ -254,6 +266,12 @@ void perform_mp3_data(const char *buffer, int size) {
     }
 }
 
+/*
+ * Funkcja czyta metadane z bufora i je przetwarza.
+ *
+ * Odczytuje z socketu bajt długości segmentu metadanych, a następnie odczytuje metadane o tej długości powiększonej 16 razy.
+ * Następnie przetwarza odczytane metadane , wyciągając z nich informację o tytule obecnego utworu.
+ */
 void read_metadata() {
     unsigned char byte;
     int metadata_size;
@@ -276,7 +294,14 @@ void read_metadata() {
     }
 }
 
-//counter: przeczytaliśmy counter po metadanych
+/*
+ * Funkcja czyta dane z socketu i rozdziela dane od metadanych, a następnie przetwarza je
+ * w zależności od miejsca wystąpienia
+ *
+ * @param: wskaźnik na miejsce w pamięci, gdzie można zapisywać dane
+ *
+ * @info: counter jest ilością dotychczas przeczytanych bajtów
+ */
 void prepare_data(char *buffer) {
     if (counter < metadata_byte_len) {
         rcv_len = read(sock, buffer, metadata_byte_len - counter);
@@ -298,6 +323,14 @@ int find_icy_metaint(){
 
 //-1 brak headera, wpp. ilość danych przeczytanych po headerze
 //zakładamy że nie przeczytamy metadanych tutaj
+/*
+ * Funkcja bada, czy zbudowany do tej pory header jest kompletny, badając czy zawiera zakończenie "\r\n\r\n"
+ *
+ * @param: zbudowany dotychczas header
+ *
+ * @return: -1 gdy header jest niekompletny,
+ *          wpp. ilość przeczytanych bajtów danych po headerze
+ */
 int find_header_end(string http_header){
     int end_of_header = 0;
     if ((end_of_header = http_header.find("\r\n\r\n")) >= (ssize_t)http_header.length()) {
@@ -307,8 +340,6 @@ int find_header_end(string http_header){
         return -1;
     } else {
         string header = http_header.substr(0, end_of_header + 3);
-//        cout << "FULL HEADER: \n";
-//        cout << header << "END OF HEADER\n";
         parse_header(header);
         metadata_byte_len = find_icy_metaint();
         string some_data (http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
@@ -325,50 +356,42 @@ void prepare_data_without_metadata(char * buffer){
 }
 
 int main(int argc, char **argv) {
-
     check_parameters(argc, argv);
     latest_title = "";
-
-
     char command[COMMAND_LENGHT + 1];
+
+/************************************ UDP part **********************************************************************/
     socklen_t rcva_len;
     ssize_t udp_read_len;
 
-    udp_sock = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
+    udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_sock < 0)
         syserr("socket");
-    // after socket() call; we should close(udp_sock) on any execution path;
-    // since all execution paths exit immediately, udp_sock would be closed when program terminates
 
     udp_server_address.sin_family = AF_INET; // IPv4
-    udp_server_address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
-    udp_server_address.sin_port = htons(
-            PORT_NUM); // default port for receiving is PORT_NUM @TODO: zmienić na udp_port_param
+    udp_server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    udp_server_address.sin_port = htons(udp_port_param);
 
-    // bind the socket to a concrete address
     if (bind(udp_sock, (struct sockaddr *) &udp_server_address, (socklen_t) sizeof(udp_server_address)) < 0) {
         syserr("bind");
     }
-
-/************************* TCP part *********************************************/
+/*************************************** TCP part ********************************************************************/
     memset(&addr_hints, 0, sizeof(struct addrinfo));
     addr_hints.ai_family = AF_INET; // IPv4
     addr_hints.ai_socktype = SOCK_STREAM;
     addr_hints.ai_protocol = IPPROTO_TCP;
     err = getaddrinfo(host_param.c_str(), argv[3], &addr_hints, &addr_result);
-    if (err == EAI_SYSTEM) { // system error
+    if (err == EAI_SYSTEM) {
         syserr("getaddrinfo: %s", gai_strerror(err));
     }
-    else if (err != 0) { // other error (host not found, etc.)
+    else if (err != 0) {
         fatal("getaddrinfo: %s", gai_strerror(err));
     }
 
-    // initialize socket according to getaddrinfo results
     sock = socket(addr_result->ai_family, addr_result->ai_socktype, addr_result->ai_protocol);
     if (sock < 0)
         syserr("socket");
 
-    // connect socket to the server
     if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0)
         syserr("connect");
 
@@ -379,7 +402,6 @@ int main(int argc, char **argv) {
     struct pollfd fd[2];
 
     state = EMPTY_STATE;
-    //@TODO: przeplot PAUSE PLAY: nie ma połączenia bo łaczy gdy na początku jest stan EMPTY
     fd[0].fd = udp_sock;
     fd[0].events = POLLIN | POLLOUT;
     fd[1].fd = sock;
@@ -387,33 +409,25 @@ int main(int argc, char **argv) {
 
     bool header_ended = false;
     string http_header = "";
-
-//    int end_of_header = 0;
-//    //int counter = 0; // mod metadata_byte_len
-//    int metadata_len = 0;
     open_file();
 
     counter = 0;
     while ((res = poll(fd, 2, 1000)) >= 0) {
         if (res > 0) {
-            if (fd[0].revents & POLLIN) { //udp
+            if (fd[0].revents & POLLIN) { //data in udp socket
                 rcva_len = (socklen_t) sizeof(udp_client_address);
-                flags = 0; // we do not request anything special
+                flags = 0;
                 udp_read_len = recvfrom(udp_sock, command, sizeof(command), flags,
                                         (struct sockaddr *) &udp_client_address, &rcva_len);
                 if (udp_read_len < 0) {
                     syserr("error on datagram from client socket");
                 } else {
-                    //@TODO: do command
-                    //w buforze command jest otrzymane polecenie
-                    std::string command_string(command, udp_read_len); //przy oddawaniu zadania
+                    std::string command_string(command, udp_read_len);
                     do_command(command_string);
-                    (void) printf("read from socket: %zd bytes: %.*s\n", udp_read_len,
-                                  (int) udp_read_len, command);
                 }
             }
 
-            if (fd[1].revents & POLLIN) { //tcp
+            if (fd[1].revents & POLLIN) {
                 if (header_ended){
                     if (metadata) {
                         prepare_data(buffer);
@@ -432,45 +446,10 @@ int main(int argc, char **argv) {
                         if (rcv_len < 0) {
                             syserr("read");
                         }
-                    } // rcv read
+                    }
                 }
-//                if (metadata) {
-//                    if (header_ended) {
-//                        prepare_data(buffer);
-//                    } else {
-//                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
-//                            string read_data(buffer, rcv_len);
-//                            http_header.append(read_data);
-//                            int read_len = 0;
-//                            if ((read_len = find_header_end(http_header)) > -1){
-//                                header_ended = true;
-//                                counter = read_len;
-//                            }
-//                            if (rcv_len < 0) {
-//                                syserr("read");
-//                            }
-//                        } // rcv read
-//                    }
-//                } else {
-//                    if (header_ended) {
-//                        prepare_data_without_metadata(buffer);
-//                    } else {
-//                        if ((rcv_len = read(sock, buffer, AVERAGE_HEADER_LENGHT)) > 0) {
-//                            string read_data(buffer, rcv_len);
-//                            http_header.append(read_data);
-//                            if (find_header_end(http_header) > -1){
-//                                header_ended = true;
-//                            }
-//                            if (rcv_len < 0) {
-//                                syserr("read");
-//                            }
-//                        } // rcv read
-//                    }
-//
-//                }
-
-            } //if tcp
-        } //IF RES
+            }
+        }
     }
     if (res == -1) {
         fatal("poll");
