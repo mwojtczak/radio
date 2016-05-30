@@ -26,13 +26,12 @@
 #define PORT_NUM     10001
 #define WAITING_TIME_IN_SECONDS 5
 #define BUFFER_SIZE 100000
-#define AVERAGE_HEADER_LENGHT 300 //@TODO: sprawdzić : przynamniej żeby było  < to + 8000
+#define AVERAGE_HEADER_LENGHT 300
 #define MAX_HEADER_SIZE 16000 + AVERAGE_HEADER_LENGHT
 
 #define EMPTY_STATE 0
 #define PLAY_STATE 1
 #define PAUSE_STATE 2
-#define QUIT_STATE 3
 #define EXIT_FAILURE 1
 
 using namespace std;
@@ -40,21 +39,19 @@ using namespace std;
 //@TODO: jak czekać na server?
 
 bool connected_to_server = false;
-string host_param;  //nazwa serwera udostępniającego strumień audio;
-string path_param;  //nazwa zasobu, zwykle sam ukośnik;
-int radio_port_param;     //numer portu serwera udostępniającego strumień audio,
-string file_param;  //file   – nazwa pliku, do którego zapisuje się dane audio,
-// a znak minus, jeśli strumień audio ma być wysyłany na standardowe
-//wyjście (w celu odtwarzania na bieżąco);
-int udp_port_param; //m-port – numer portu UDP, na którym program nasłuchuje poleceń,
-bool metadata;      //no, jeśli program ma nie żądać przysyłania metadanych, yes wpp
+string host_param;               //nazwa serwera udostępniającego strumień audio;
+string path_param;               //nazwa zasobu, zwykle sam ukośnik;
+int radio_port_param;            //numer portu serwera udostępniającego strumień audio,
+string file_param;               //file – nazwa pliku, do którego zapisuje się dane audio,
+int udp_port_param;              //m-port – numer portu UDP, na którym program nasłuchuje poleceń,
+bool metadata;                   //'no', jeśli program ma nie żądać przysyłania metadanych, 'yes' wpp
 int sock;
 struct addrinfo addr_hints;
 struct addrinfo *addr_result;
 
 int i, err;
 char buffer[BUFFER_SIZE];
-ssize_t len, rcv_len;
+ssize_t rcv_len;
 int res;
 int state;
 std::map<std::string, std::string> m;
@@ -72,7 +69,7 @@ int convert_param_to_number(string num, string param_name) {
     try {
         return stoi(num);
     }
-    catch (const std::invalid_argument& ia) {
+    catch (const std::invalid_argument &ia) {
         fatal("Użycie:  ./player host path r-port file m-port md, parametr %s nie jest liczbą.\n",
               param_name.c_str());
     }
@@ -85,15 +82,15 @@ int convert_param_to_number(string num, string param_name) {
  *
  * @param: napis reprezentujący ów kod
  */
-void check_returned_http_code(string code_str){
+void check_returned_http_code(string code_str) {
     int code;
     try {
         code = stoi(code_str);
     }
-    catch (const std::invalid_argument& ia) {
+    catch (const std::invalid_argument &ia) {
         fatal("bad http code");
     }
-    if (!(code == 200 || code == 302 || code == 304)){
+    if (!(code == 200 || code == 302 || code == 304)) {
         fatal("bad http code");
     }
 }
@@ -119,7 +116,7 @@ void open_file() {
     }
 }
 
-void save_to_file(ofstream * file, const char *buffer, size_t size) {
+void save_to_file(ofstream *file, const char *buffer, size_t size) {
     if (file == NULL) {
         fatal("Error handling file\n");
     } else {
@@ -165,7 +162,7 @@ void connect_to_server() {
     if (metadata)
         request.append("Icy-MetaData:1\r\n");
     request.append("\r\n");
-    if (write(sock, request.c_str(), request.length()) != (ssize_t)request.length()) {
+    if (write(sock, request.c_str(), request.length()) != (ssize_t) request.length()) {
         syserr("partial / failed write");
     }
 }
@@ -227,7 +224,7 @@ void title_command() {
         snd_len = sendto(udp_sock, latest_title.c_str(), (size_t) latest_title.length(), sflags,
                          (struct sockaddr *) &udp_client_address, (socklen_t) sizeof(udp_client_address));
     }
-    if (snd_len != (ssize_t)latest_title.length())
+    if (snd_len != (ssize_t) latest_title.length())
         syserr("error on sending datagram to client socket");
 }
 
@@ -258,9 +255,9 @@ string get_metadata(char *buffer, int size) {
 
 void perform_mp3_data(const char *buffer, int size) {
     if (state == PLAY_STATE) {
-        if (save){
+        if (save) {
             save_to_file(&file, buffer, size);
-        } else{
+        } else {
             fwrite(buffer, 1, size, stdout);
         }
     }
@@ -270,7 +267,7 @@ void perform_mp3_data(const char *buffer, int size) {
  * Funkcja czyta metadane z bufora i je przetwarza.
  *
  * Odczytuje z socketu bajt długości segmentu metadanych, a następnie odczytuje metadane o tej długości powiększonej 16 razy.
- * Następnie przetwarza odczytane metadane , wyciągając z nich informację o tytule obecnego utworu.
+ * Następnie przetwarza odczytane metadane, wyciągając z nich informację o tytule obecnego utworu.
  */
 void read_metadata() {
     unsigned char byte;
@@ -281,12 +278,12 @@ void read_metadata() {
         fatal("read");
     if (rcv_len == 0) {
         //serwer nie odpowiada, poczekać trochę czy zakonczyć?
-
+//@TODO:
     }
     metadata_size = metadata_size * 16;
     if (metadata_size > 0) {
         int read_len = 0;
-        while (read_len < metadata_size){
+        while (read_len < metadata_size) {
             rcv_len = read(sock, buffer + read_len, metadata_size - read_len);
             read_len += rcv_len;
         }
@@ -314,8 +311,8 @@ void prepare_data(char *buffer) {
     }
 }
 
-int find_icy_metaint(){
-    if (m.find("icy-metaint") == m.end()){
+int find_icy_metaint() {
+    if (m.find("icy-metaint") == m.end()) {
         fatal("No icy-metaint in header");
     }
     return stoi(m["icy-metaint"]);
@@ -331,9 +328,9 @@ int find_icy_metaint(){
  * @return: -1 gdy header jest niekompletny,
  *          wpp. ilość przeczytanych bajtów danych po headerze
  */
-int find_header_end(string http_header){
+int find_header_end(string http_header) {
     int end_of_header = 0;
-    if ((end_of_header = http_header.find("\r\n\r\n")) >= (ssize_t)http_header.length()) {
+    if ((end_of_header = http_header.find("\r\n\r\n")) >= (ssize_t) http_header.length()) {
         if (http_header.length() > MAX_HEADER_SIZE) {
             fatal("Too long header.\n");
         }
@@ -342,15 +339,14 @@ int find_header_end(string http_header){
         string header = http_header.substr(0, end_of_header + 3);
         parse_header(header);
         metadata_byte_len = find_icy_metaint();
-        string some_data (http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
-//        @TODO w buforze na buffer + end_of_header + 4 (perwsza pozycja) są dane do przetworzenia
+        string some_data(http_header.substr(end_of_header + 4), http_header.length() - end_of_header - 4);
         counter = http_header.length() - end_of_header - 4;
         perform_mp3_data(some_data.c_str(), some_data.length());
-        return  http_header.length() - end_of_header - 4;
+        return http_header.length() - end_of_header - 4;
     }
 }
 
-void prepare_data_without_metadata(char * buffer){
+void prepare_data_without_metadata(char *buffer) {
     rcv_len = read(sock, buffer, sizeof(buffer));
     perform_mp3_data(buffer, rcv_len);
 }
@@ -426,12 +422,11 @@ int main(int argc, char **argv) {
                     do_command(command_string);
                 }
             }
-
             if (fd[1].revents & POLLIN) {
-                if (header_ended){
+                if (header_ended) {
                     if (metadata) {
                         prepare_data(buffer);
-                    } else{
+                    } else {
                         prepare_data_without_metadata(buffer);
                     }
                 } else {
@@ -439,7 +434,7 @@ int main(int argc, char **argv) {
                         string read_data(buffer, rcv_len);
                         http_header.append(read_data);
                         int read_len = 0;
-                        if ((read_len = find_header_end(http_header)) > -1){
+                        if ((read_len = find_header_end(http_header)) > -1) {
                             header_ended = true;
                             counter = read_len;
                         }
